@@ -1,27 +1,38 @@
-extern crate clap;
+extern crate futures;
+extern crate futures_io;
+extern crate futures_mio;
 
-use clap::{Arg, App};
+use std::env;
+use std::net::SocketAddr;
 
-fn main() {
-    let matches = App::new("Rust Echo Server")
-        .version("0.1.0")
-        .author("Sean Chen <seanchen11235@gmail.com>")
-        .about("A simple Rust echo server")
-        .arg(Arg::with_name("port")
-             .short("p")
-             .long("port")
-             .takes_value(true)
-             .help("The port number to connect to. Defaults to 8080."))
-        .arg(Arg::with_name("maxnpending")
-             .short("n")
-             .long("maxnpending")
-             .takes_value(true)
-             .help("The max number of pending connections. Defaults to 10."))
-        .get_matches();
+use futures::Future;
+use futures::stream::Stream;
+use futures_io::{copy, TaskIo};
 
-    let port = matches.value_of("port").unwrap_or("8080");
-    let maxnpending = matches.value_of("maxnpending").unwrap_or("10");
+fn main() { 
+   let addr = env::args().nth(1).unwrap_or("localhost:8080".to_string());
+   let addr = addr.parse::<SocketAddr>().unwrap();
 
-    println!("The specified port is: {}", port);
-    println!("The maximum number of pending connections is: {}", maxnpending);
+   let mut loop = futures_mio::Loop::new().unwrap();
+
+   let server = loop.handle().tcp_listen(&addr);
+
+   let done = server.and_then(move |socket| {
+       println!("Listening on: {}", addr);
+
+       socket.incoming().for_each(|(socket, addr)| {
+           let io = TaskIo::new(socket);
+           let pair = io.map(|io| io.split());
+           let amount = pair.and_then(|(reader, writer)| {
+               copy(reader, writer)
+           });
+           amount.map(move |amt| {
+               println!("Wrote {} bytes to {}", amt, addr)
+           }).forget();
+
+           Ok(())
+       })
+   });
+
+   loop.run(done).unwrap();
 }

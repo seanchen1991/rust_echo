@@ -1,6 +1,13 @@
 extern crate clap;
+extern crate futures;
+extern crate futures_io;
+extern crate futures_mio;
 
 use clap::{Arg, App};
+use std::net::{SocketAddr, Shutdown};
+
+use futures::Future;
+use futures_mio::Loop;
 
 fn main() {
     let matches = App::new("Rust Echo Client")
@@ -28,7 +35,21 @@ fn main() {
     let port = matches.value_of("port").unwrap_or("8080");
     let message = matches.value_of("message").unwrap_or("Hello World!");
 
-    println!("The specified server is: {}", server);
-    println!("The specified port is: {}", port);
-    println!("The specified message is: {}", message);
+    let mut loop = Loop::new().unwrap();
+    let addr = &server + ":" + &port;
+
+    let addr = addr.parse::<SocketAddr>().unwrap();
+    let socket = loop.handle().tcp_connect(&addr);
+
+    let request = socket.and_then(|socket| {
+        futures_io.write_all(socket, message)
+    });
+
+    let response = request.and_then(|(socket, _)| {
+        socket.shutdown(std::net::Shutdown::Write).expect("Could not shut down");
+        futures_io::read_to_end(socket, Vec::new())
+    });
+
+    let data = loop.run(response).unwrap();
+    println!("{}", String::from_utf8_lossy(&data));
 }
